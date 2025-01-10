@@ -18,6 +18,7 @@ class SubscriptionInfo
      * @param bool $subscribed Indicates if the user is currently subscribed.
      * @param Carbon $current_subscription_start Start timestamp of the current subscription period.
      * @param Carbon $current_subscription_end End timestamp of the current subscription period.
+     * @param Carbon $current_subscription_reset Quota reset timestamp of the current subscription period.
      * @param int $subscription_words_quota Total word quota for the current subscription period.
      * @param int $subscription_words_used Number of words used in the current subscription period.
      * @param float $subscription_words_used_percentage Percentage of the word quota used
@@ -30,6 +31,7 @@ class SubscriptionInfo
         public bool   $subscribed,
         public Carbon $current_subscription_start,
         public Carbon $current_subscription_end,
+        public Carbon $current_subscription_reset,
         public int    $subscription_words_quota,
         public int    $subscription_words_used,
         public float  $subscription_words_used_percentage
@@ -51,6 +53,7 @@ class SubscriptionInfo
             'subscribed' => $this->subscribed,
             'current_subscription_start' => $this->current_subscription_start->toDateTimeString(),
             'current_subscription_end' => $this->current_subscription_end->toDateTimeString(),
+            'current_subscription_reset' => $this->current_subscription_reset->toDateTimeString(),
             'subscription_words_quota' => $this->subscription_words_quota,
             'subscription_words_used' => $this->subscription_words_used,
             'subscription_words_used_percentage' => $this->subscription_words_used_percentage,
