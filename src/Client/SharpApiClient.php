@@ -56,7 +56,6 @@ class SharpApiClient
         $this->setApiBaseUrl($apiBaseUrl ?? 'https://sharpapi.com/api/v1');
         $this->setUserAgent($userAgent ?? 'SharpAPIPHPAgent/1.2.0');
         $this->client = new Client([
-            'base_uri' => $this->getApiBaseUrl(),
             'headers' => $this->getHeaders()
         ]);
     }
@@ -191,24 +190,36 @@ class SharpApiClient
         array $data = [],
         ?string $filePath = null
     ): ResponseInterface {
-        $client = new Client();
         $options = [
             'headers' => $this->getHeaders(),
         ];
+
         if ($method === 'POST') {
             if (is_string($filePath) && strlen($filePath)) {
-                $options['multipart'][] =
-                    [
-                        'name' => 'file',
-                        'contents' => file_get_contents($filePath),
-                        'filename' => basename($filePath),
+                $multipart = [];
+
+                // Attach file
+                $multipart[] = [
+                    'name'     => 'file',
+                    'contents' => file_get_contents($filePath),
+                    'filename' => basename($filePath),
+                ];
+
+                // Add each key-value pair from $data as a form-data field
+                foreach ($data as $key => $value) {
+                    $multipart[] = [
+                        'name'     => $key,
+                        'contents' => is_array($value) ? json_encode($value) : $value,
                     ];
+                }
+
+                $options['multipart'] = $multipart;
             } else {
                 $options['json'] = $data;
             }
         }
 
-        return $client->request($method, $this->getApiBaseUrl().$url, $options);
+        return $this->client->request($method, $this->getApiBaseUrl() . $url, $options);
     }
 
     /**
