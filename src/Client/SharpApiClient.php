@@ -223,6 +223,35 @@ class SharpApiClient
     }
 
     /**
+     * Makes a GET request with proper query parameter handling.
+     *
+     * This method was added to properly support GET requests with query parameters
+     * for utility endpoints (airports, web scraping, skills, job positions).
+     * Unlike the generic makeRequest() method which only handles POST data,
+     * this method correctly passes query parameters using Guzzle's 'query' option.
+     *
+     * @param string $url The API endpoint relative to the base URL.
+     * @param array $queryParams Query parameters to append to the URL.
+     * @return ResponseInterface The Guzzle response object.
+     * @throws GuzzleException if the request fails.
+     * @api
+     */
+    protected function makeGetRequest(
+        string $url,
+        array $queryParams = []
+    ): ResponseInterface {
+        $options = [
+            'headers' => $this->getHeaders(),
+        ];
+
+        if (!empty($queryParams)) {
+            $options['query'] = $queryParams;
+        }
+
+        return $this->client->request('GET', $this->getApiBaseUrl() . $url, $options);
+    }
+
+    /**
      * @param ResponseInterface $response
      * @return mixed
      * @api
