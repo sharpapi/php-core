@@ -38,6 +38,41 @@ echo $quota->requests_per_minute;
 
 ---
 
+## Rate Limiting
+
+The SDK automatically handles API rate limits. When the API returns HTTP 429 (Too Many Requests), the client will:
+
+1. **Retry automatically** — reads the `Retry-After` header, sleeps for the specified duration, and retries the request (up to 3 times by default).
+2. **Slow down polling** — during `fetchResults()`, when `X-RateLimit-Remaining` drops below the low threshold, polling intervals are automatically increased to avoid hitting the limit.
+
+### Inspecting Rate-Limit State
+
+After any API call, you can check the current rate-limit values:
+
+```php
+$client = new SharpApiClient('your-api-key');
+$client->ping();
+
+echo $client->getRateLimitLimit();     // e.g. 60 (requests per window)
+echo $client->getRateLimitRemaining(); // e.g. 58 (remaining in current window)
+```
+
+> **Note:** `getRateLimitLimit()` and `getRateLimitRemaining()` return `null` before the first API call or after endpoints that don't return rate-limit headers (e.g. `/ping`, `/quota`).
+
+### Configuration
+
+```php
+// Max automatic retries on HTTP 429 (default: 3)
+$client->setMaxRetryOnRateLimit(5);
+
+// Threshold below which polling intervals are increased (default: 3)
+$client->setRateLimitLowThreshold(5);
+```
+
+When `rateLimitRemaining` is at or below the threshold, polling intervals in `fetchResults()` are multiplied by an increasing factor (2x at threshold, growing as remaining approaches 0). This helps avoid 429 errors during long-running job polling.
+
+---
+
 ## Credits
 
 - [A2Z WEB LTD](https://github.com/a2zwebltd)

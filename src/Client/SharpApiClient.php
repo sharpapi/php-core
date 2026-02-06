@@ -7,6 +7,7 @@ namespace SharpAPI\Core\Client;
 use Carbon\Carbon;
 use Exception;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\GuzzleException;
 use InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
@@ -34,6 +35,10 @@ class SharpApiClient
     protected bool $useCustomInterval = false;
     protected int $apiJobStatusPollingWait = 180;
     protected string $userAgent;
+    protected ?int $rateLimitLimit = null;
+    protected ?int $rateLimitRemaining = null;
+    protected int $maxRetryOnRateLimit = 3;
+    protected int $rateLimitLowThreshold = 3;
     private Client $client;
 
     /**
@@ -54,7 +59,7 @@ class SharpApiClient
             throw new InvalidArgumentException('API key is required.');
         }
         $this->setApiBaseUrl($apiBaseUrl ?? 'https://sharpapi.com/api/v1');
-        $this->setUserAgent($userAgent ?? 'SharpAPIPHPAgent/1.2.0');
+        $this->setUserAgent($userAgent ?? 'SharpAPIPHPAgent/1.3.0');
         $this->client = new Client([
             'headers' => $this->getHeaders()
         ]);
@@ -133,6 +138,62 @@ class SharpApiClient
     public function setApiJobStatusPollingWait(int $apiJobStatusPollingWait): void
     {
         $this->apiJobStatusPollingWait = $apiJobStatusPollingWait;
+    }
+
+    /**
+     * @return int|null The rate limit (requests per window) from the last API response, or null if not yet known.
+     * @api
+     */
+    public function getRateLimitLimit(): ?int
+    {
+        return $this->rateLimitLimit;
+    }
+
+    /**
+     * @return int|null The remaining requests in the current window from the last API response, or null if not yet known.
+     * @api
+     */
+    public function getRateLimitRemaining(): ?int
+    {
+        return $this->rateLimitRemaining;
+    }
+
+    /**
+     * @return int Maximum number of automatic retries on HTTP 429.
+     * @api
+     */
+    public function getMaxRetryOnRateLimit(): int
+    {
+        return $this->maxRetryOnRateLimit;
+    }
+
+    /**
+     * @param int $maxRetryOnRateLimit Maximum number of automatic retries on HTTP 429.
+     * @return void
+     * @api
+     */
+    public function setMaxRetryOnRateLimit(int $maxRetryOnRateLimit): void
+    {
+        $this->maxRetryOnRateLimit = $maxRetryOnRateLimit;
+    }
+
+    /**
+     * @return int When remaining requests fall at or below this threshold, polling intervals are increased.
+     * @api
+     */
+    public function getRateLimitLowThreshold(): int
+    {
+        return $this->rateLimitLowThreshold;
+    }
+
+    /**
+     * @param int $rateLimitLowThreshold When remaining requests fall at or below this threshold, polling intervals are increased.
+     * @return void
+     * @api
+     */
+    public function setRateLimitLowThreshold(int $rateLimitLowThreshold): void
+    {
+        $this->rateLimitLowThreshold = $rateLimitLowThreshold;
     }
 
     /**
@@ -220,7 +281,7 @@ class SharpApiClient
             }
         }
 
-        return $this->client->request($method, $this->getApiBaseUrl() . $url, $options);
+        return $this->executeWithRateLimitRetry($method, $this->getApiBaseUrl() . $url, $options);
     }
 
     /**
@@ -249,7 +310,7 @@ class SharpApiClient
             $options['query'] = $queryParams;
         }
 
-        return $this->client->request('GET', $this->getApiBaseUrl() . $url, $options);
+        return $this->executeWithRateLimitRetry('GET', $this->getApiBaseUrl() . $url, $options);
     }
 
     /**
@@ -275,7 +336,28 @@ class SharpApiClient
         $waitingTime = 0;
 
         do {
-            $response = $this->client->request('GET', $statusUrl, ['headers' => $this->getHeaders()]);
+            try {
+                $response = $this->client->request('GET', $statusUrl, ['headers' => $this->getHeaders()]);
+            } catch (ClientException $e) {
+                if ($e->getResponse()->getStatusCode() === 429) {
+                    $retryResponse = $e->getResponse();
+                    $this->extractRateLimitHeaders($retryResponse);
+                    $retryDelay = isset($retryResponse->getHeader('Retry-After')[0])
+                        ? (int) $retryResponse->getHeader('Retry-After')[0]
+                        : $this->getApiJobStatusPollingInterval();
+
+                    $waitingTime += $retryDelay;
+                    if ($waitingTime >= $this->getApiJobStatusPollingWait()) {
+                        throw new ApiException('Polling timed out while waiting for job completion (rate limited).', 429);
+                    }
+
+                    sleep($retryDelay);
+                    continue;
+                }
+                throw $e;
+            }
+
+            $this->extractRateLimitHeaders($response);
             $jobStatus = json_decode($response->getBody()->__toString(), true)['data']['attributes'];
 
             if ($jobStatus['status'] === SharpApiJobStatusEnum::SUCCESS->value ||
@@ -290,6 +372,8 @@ class SharpApiClient
             if ($this->isUseCustomInterval()) {
                 $retryAfter = $this->getApiJobStatusPollingInterval();
             }
+
+            $retryAfter = $this->adjustIntervalForRateLimit($retryAfter);
 
             $waitingTime += $retryAfter;
             if ($waitingTime >= $this->getApiJobStatusPollingWait()) {
@@ -311,6 +395,93 @@ class SharpApiClient
             status: $data['attributes']['status'],
             result: $result ?? null
         );
+    }
+
+    /**
+     * Extracts rate-limit headers from an API response and stores them.
+     *
+     * @param ResponseInterface $response The API response.
+     */
+    private function extractRateLimitHeaders(ResponseInterface $response): void
+    {
+        $limit = $response->getHeader('X-RateLimit-Limit');
+        if (!empty($limit)) {
+            $this->rateLimitLimit = (int) $limit[0];
+        }
+
+        $remaining = $response->getHeader('X-RateLimit-Remaining');
+        if (!empty($remaining)) {
+            $this->rateLimitRemaining = (int) $remaining[0];
+        }
+    }
+
+    /**
+     * Adjusts a polling interval when the rate-limit remaining count is low.
+     *
+     * When remaining is at or below the threshold, the base interval is multiplied
+     * by a scaling factor that increases as remaining approaches 0.
+     *
+     * @param int $baseInterval The original polling interval in seconds.
+     * @return int The adjusted interval.
+     */
+    private function adjustIntervalForRateLimit(int $baseInterval): int
+    {
+        if ($this->rateLimitRemaining === null || $this->rateLimitRemaining > $this->rateLimitLowThreshold) {
+            return $baseInterval;
+        }
+
+        // Scale: 2x at threshold, increasing as remaining approaches 0
+        $scale = 2 + ($this->rateLimitLowThreshold - $this->rateLimitRemaining);
+
+        return $baseInterval * $scale;
+    }
+
+    /**
+     * Wraps an HTTP request with automatic 429 retry logic.
+     *
+     * On success, rate-limit headers are extracted. On HTTP 429, the request is
+     * retried after sleeping for the Retry-After duration, up to maxRetryOnRateLimit times.
+     * All other client exceptions are re-thrown.
+     *
+     * @param string $method The HTTP method.
+     * @param string $url The full request URL.
+     * @param array $options Guzzle request options.
+     * @return ResponseInterface The successful response.
+     * @throws ApiException if retries are exhausted on 429.
+     * @throws GuzzleException for non-429 failures.
+     */
+    private function executeWithRateLimitRetry(string $method, string $url, array $options): ResponseInterface
+    {
+        $attempts = 0;
+
+        while (true) {
+            try {
+                $response = $this->client->request($method, $url, $options);
+                $this->extractRateLimitHeaders($response);
+                return $response;
+            } catch (ClientException $e) {
+                if ($e->getResponse()->getStatusCode() !== 429) {
+                    throw $e;
+                }
+
+                $attempts++;
+                $retryResponse = $e->getResponse();
+                $this->extractRateLimitHeaders($retryResponse);
+
+                if ($attempts >= $this->maxRetryOnRateLimit) {
+                    throw new ApiException(
+                        'Rate limit exceeded. Retries exhausted after ' . $attempts . ' attempts.',
+                        429
+                    );
+                }
+
+                $retryAfter = isset($retryResponse->getHeader('Retry-After')[0])
+                    ? (int) $retryResponse->getHeader('Retry-After')[0]
+                    : 1;
+
+                sleep($retryAfter);
+            }
+        }
     }
 
     /**
