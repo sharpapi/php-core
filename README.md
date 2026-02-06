@@ -10,6 +10,34 @@ See more at [SharpAPI.com Website &raquo;](https://sharpapi.com/)
 
 ---
 
+## Quota Method
+
+The `quota()` method returns a `SubscriptionInfo` DTO with the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `timestamp` | `Carbon` | Timestamp of the subscription check |
+| `on_trial` | `bool` | Whether the account is on a trial period |
+| `trial_ends` | `Carbon` | End date of the trial period |
+| `subscribed` | `bool` | Whether the user is currently subscribed |
+| `current_subscription_start` | `Carbon` | Start of the current subscription period |
+| `current_subscription_end` | `Carbon` | End of the current subscription period |
+| `current_subscription_reset` | `Carbon` | Quota reset timestamp |
+| `subscription_words_quota` | `int` | Total word quota for the period |
+| `subscription_words_used` | `int` | Words used in the current period |
+| `subscription_words_used_percentage` | `float` | Percentage of word quota used |
+| `requests_per_minute` | `int` | Maximum API requests allowed per minute |
+
+```php
+$client = new SharpApiClient('your-api-key');
+$quota = $client->quota();
+
+echo $quota->subscription_words_quota;
+echo $quota->requests_per_minute;
+```
+
+---
+
 ## Credits
 
 - [A2Z WEB LTD](https://github.com/a2zwebltd)

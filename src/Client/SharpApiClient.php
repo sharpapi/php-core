@@ -170,7 +170,8 @@ class SharpApiClient
             current_subscription_reset: new Carbon($info['current_subscription_reset']),
             subscription_words_quota: $info['subscription_words_quota'],
             subscription_words_used: $info['subscription_words_used'],
-            subscription_words_used_percentage: $info['subscription_words_used_percentage']
+            subscription_words_used_percentage: $info['subscription_words_used_percentage'],
+            requests_per_minute: $info['requests_per_minute']
         );
     }
 

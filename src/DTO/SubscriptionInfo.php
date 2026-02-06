@@ -23,6 +23,7 @@ class SubscriptionInfo
      * @param int $subscription_words_used Number of words used in the current subscription period.
      * @param float $subscription_words_used_percentage Percentage of the word quota used
      *                                                     in the current subscription period.
+     * @param int $requests_per_minute Maximum number of API requests allowed per minute.
      */
     public function __construct(
         public Carbon $timestamp,
@@ -34,7 +35,8 @@ class SubscriptionInfo
         public Carbon $current_subscription_reset,
         public int    $subscription_words_quota,
         public int    $subscription_words_used,
-        public float  $subscription_words_used_percentage
+        public float  $subscription_words_used_percentage,
+        public int    $requests_per_minute
     )
     {
     }
@@ -57,6 +59,7 @@ class SubscriptionInfo
             'subscription_words_quota' => $this->subscription_words_quota,
             'subscription_words_used' => $this->subscription_words_used,
             'subscription_words_used_percentage' => $this->subscription_words_used_percentage,
+            'requests_per_minute' => $this->requests_per_minute,
         ];
     }
 }
