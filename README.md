@@ -10,6 +10,22 @@ See more at [SharpAPI.com Website &raquo;](https://sharpapi.com/)
 
 ---
 
+## Requirements
+
+- PHP >= 8.1
+- `ext-json`
+- `ext-mbstring`
+
+## Installation
+
+```bash
+composer require sharpapi/php-core
+```
+
+> **Note:** This is the core library. Most users will install one of the [specialized endpoint packages](https://packagist.org/packages/sharpapi/) which already require `sharpapi/php-core` as a dependency.
+
+---
+
 ## Quota Method
 
 The `quota()` method returns a `SubscriptionInfo` DTO with the following fields:
