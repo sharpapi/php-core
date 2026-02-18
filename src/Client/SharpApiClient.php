@@ -1,4 +1,6 @@
-<?php /** @noinspection PhpSameParameterValueInspection */
+<?php
+
+/** @noinspection PhpSameParameterValueInspection */
 
 declare(strict_types=1);
 
@@ -11,10 +13,11 @@ use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\GuzzleException;
 use InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
-use SharpAPI\Core\DTO\SubscriptionInfo;
 use SharpAPI\Core\DTO\SharpApiJob;
+use SharpAPI\Core\DTO\SubscriptionInfo;
 use SharpAPI\Core\Enums\SharpApiJobStatusEnum;
 use SharpAPI\Core\Exceptions\ApiException;
+use SharpAPI\Core\RateLimit\SlidingWindowRateLimiter;
 use Spatie\Url\Url;
 
 /**
@@ -24,29 +27,45 @@ use Spatie\Url\Url;
  * core functionalities such as sending requests, handling configurations, and
  * fetching basic information like ping status and subscription details.
  *
- * @package SharpApi\Core\Client
  * @api
  */
 class SharpApiClient
 {
     protected string $apiBaseUrl;
+
     protected string $apiKey;
+
     protected int $apiJobStatusPollingInterval = 10;
+
     protected bool $useCustomInterval = false;
+
     protected int $apiJobStatusPollingWait = 180;
+
     protected string $userAgent;
+
     protected ?int $rateLimitLimit = null;
+
     protected ?int $rateLimitRemaining = null;
+
     protected int $maxRetryOnRateLimit = 3;
+
     protected int $rateLimitLowThreshold = 3;
+
+    protected ?SlidingWindowRateLimiter $rateLimiter = null;
+
+    protected int $requestsPerMinute = 60;
+
+    protected bool $throttleRequests = true;
+
     private Client $client;
 
     /**
      * Initializes a new instance of the SharpApiClient class.
      *
-     * @param string $apiKey The API key required for authentication.
-     * @param string|null $apiBaseUrl Optional API base URL override.
-     * @param string|null $userAgent Optional User-Agent header value.
+     * @param  string  $apiKey  The API key required for authentication.
+     * @param  string|null  $apiBaseUrl  Optional API base URL override.
+     * @param  string|null  $userAgent  Optional User-Agent header value.
+     *
      * @throws InvalidArgumentException if the API key is empty.
      */
     public function __construct(
@@ -61,8 +80,9 @@ class SharpApiClient
         $this->setApiBaseUrl($apiBaseUrl ?? 'https://sharpapi.com/api/v1');
         $this->setUserAgent($userAgent ?? 'SharpAPIPHPAgent/1.3.0');
         $this->client = new Client([
-            'headers' => $this->getHeaders()
+            'headers' => $this->getHeaders(),
         ]);
+        $this->rateLimiter = new SlidingWindowRateLimiter($this->requestsPerMinute);
     }
 
     public function getApiBaseUrl(): string
@@ -102,8 +122,6 @@ class SharpApiClient
 
     /**
      * @api
-     * @param int $apiJobStatusPollingInterval
-     * @return void
      */
     public function setApiJobStatusPollingInterval(int $apiJobStatusPollingInterval): void
     {
@@ -116,8 +134,6 @@ class SharpApiClient
     }
 
     /**
-     * @param bool $useCustomInterval
-     * @return void
      * @api
      */
     public function setUseCustomInterval(bool $useCustomInterval): void
@@ -131,8 +147,6 @@ class SharpApiClient
     }
 
     /**
-     * @param int $apiJobStatusPollingWait
-     * @return void
      * @api
      */
     public function setApiJobStatusPollingWait(int $apiJobStatusPollingWait): void
@@ -142,6 +156,7 @@ class SharpApiClient
 
     /**
      * @return int|null The rate limit (requests per window) from the last API response, or null if not yet known.
+     *
      * @api
      */
     public function getRateLimitLimit(): ?int
@@ -151,6 +166,7 @@ class SharpApiClient
 
     /**
      * @return int|null The remaining requests in the current window from the last API response, or null if not yet known.
+     *
      * @api
      */
     public function getRateLimitRemaining(): ?int
@@ -160,6 +176,7 @@ class SharpApiClient
 
     /**
      * @return int Maximum number of automatic retries on HTTP 429.
+     *
      * @api
      */
     public function getMaxRetryOnRateLimit(): int
@@ -168,8 +185,8 @@ class SharpApiClient
     }
 
     /**
-     * @param int $maxRetryOnRateLimit Maximum number of automatic retries on HTTP 429.
-     * @return void
+     * @param  int  $maxRetryOnRateLimit  Maximum number of automatic retries on HTTP 429.
+     *
      * @api
      */
     public function setMaxRetryOnRateLimit(int $maxRetryOnRateLimit): void
@@ -179,6 +196,7 @@ class SharpApiClient
 
     /**
      * @return int When remaining requests fall at or below this threshold, polling intervals are increased.
+     *
      * @api
      */
     public function getRateLimitLowThreshold(): int
@@ -187,8 +205,8 @@ class SharpApiClient
     }
 
     /**
-     * @param int $rateLimitLowThreshold When remaining requests fall at or below this threshold, polling intervals are increased.
-     * @return void
+     * @param  int  $rateLimitLowThreshold  When remaining requests fall at or below this threshold, polling intervals are increased.
+     *
      * @api
      */
     public function setRateLimitLowThreshold(int $rateLimitLowThreshold): void
@@ -197,43 +215,125 @@ class SharpApiClient
     }
 
     /**
+     * @api
+     */
+    public function getRequestsPerMinute(): int
+    {
+        return $this->requestsPerMinute;
+    }
+
+    /**
+     * @api
+     */
+    public function setRequestsPerMinute(int $rpm): void
+    {
+        $this->requestsPerMinute = $rpm;
+
+        if ($rpm > 0) {
+            $this->rateLimiter = new SlidingWindowRateLimiter($rpm);
+        } else {
+            $this->rateLimiter = null;
+        }
+    }
+
+    /**
+     * @api
+     */
+    public function getRateLimiter(): ?SlidingWindowRateLimiter
+    {
+        return $this->rateLimiter;
+    }
+
+    /**
+     * Returns the current rate limit state for external caching.
+     *
+     * @return array{limit: int|null, remaining: int|null}
+     *
+     * @api
+     */
+    public function getRateLimitState(): array
+    {
+        return [
+            'limit' => $this->rateLimitLimit,
+            'remaining' => $this->rateLimitRemaining,
+        ];
+    }
+
+    /**
+     * Restores rate limit state from an external cache.
+     *
+     * @param  array{limit?: int|null, remaining?: int|null}  $state
+     *
+     * @api
+     */
+    public function setRateLimitState(array $state): void
+    {
+        if (isset($state['limit'])) {
+            $this->rateLimitLimit = $state['limit'];
+        }
+        if (isset($state['remaining'])) {
+            $this->rateLimitRemaining = $state['remaining'];
+        }
+    }
+
+    /**
+     * Checks if a request can be made based on server-reported remaining quota.
+     *
+     * @api
+     */
+    public function canMakeRequest(): bool
+    {
+        return $this->rateLimitRemaining === null || $this->rateLimitRemaining > 0;
+    }
+
+    /**
      * Sends a ping request to the API to check its availability and retrieve the current timestamp.
      *
-     * @throws GuzzleException if the API request fails.
+     * @return array|null
      * @api
      */
     public function ping(): ?array
     {
-        $response = $this->makeRequest('GET', '/ping');
-        return json_decode($response->getBody()->__toString(), true);
+        $this->throttleRequests = false;
+        try {
+            $response = $this->makeRequest('GET', '/ping');
+
+            return json_decode($response->getBody()->__toString(), true);
+        } finally {
+            $this->throttleRequests = true;
+        }
     }
 
     /**
      * Retrieves the subscription quota information.
      *
      * @return SubscriptionInfo|null A DTO containing subscription details.
-     * @throws GuzzleException if the API request fails.
-     * @throws Exception
+     *
      * @api
      */
     public function quota(): ?SubscriptionInfo
     {
-        $response = $this->makeRequest('GET', '/quota');
-        $info = json_decode($response->getBody()->__toString(), true);
+        $this->throttleRequests = false;
+        try {
+            $response = $this->makeRequest('GET', '/quota');
+            $info = json_decode($response->getBody()->__toString(), true);
 
-        return new SubscriptionInfo(
-            timestamp: new Carbon($info['timestamp']),
-            on_trial: $info['on_trial'],
-            trial_ends: new Carbon($info['trial_ends']),
-            subscribed: $info['subscribed'],
-            current_subscription_start: new Carbon($info['current_subscription_start']),
-            current_subscription_end: new Carbon($info['current_subscription_end']),
-            current_subscription_reset: new Carbon($info['current_subscription_reset']),
-            subscription_words_quota: $info['subscription_words_quota'],
-            subscription_words_used: $info['subscription_words_used'],
-            subscription_words_used_percentage: $info['subscription_words_used_percentage'],
-            requests_per_minute: $info['requests_per_minute']
-        );
+            return new SubscriptionInfo(
+                timestamp: new Carbon($info['timestamp']),
+                on_trial: $info['on_trial'],
+                trial_ends: new Carbon($info['trial_ends']),
+                subscribed: $info['subscribed'],
+                current_subscription_start: new Carbon($info['current_subscription_start']),
+                current_subscription_end: new Carbon($info['current_subscription_end']),
+                current_subscription_reset: new Carbon($info['current_subscription_reset']),
+                subscription_words_quota: $info['subscription_words_quota'],
+                subscription_words_used: $info['subscription_words_used'],
+                subscription_words_used_percentage: $info['subscription_words_used_percentage'],
+                requests_per_minute: $info['requests_per_minute']
+            );
+        } finally {
+            $this->throttleRequests = true;
+        }
     }
 
     /**
@@ -244,7 +344,9 @@ class SharpApiClient
      * @param array $data Optional request data for POST requests.
      * @param string|null $filePath Optional file path for file upload.
      * @return ResponseInterface The Guzzle response object.
+     *
      * @throws GuzzleException if the request fails.
+     * @throws ApiException
      */
     protected function makeRequest(
         string $method,
@@ -262,7 +364,7 @@ class SharpApiClient
 
                 // Attach file
                 $multipart[] = [
-                    'name'     => 'file',
+                    'name' => 'file',
                     'contents' => file_get_contents($filePath),
                     'filename' => basename($filePath),
                 ];
@@ -270,7 +372,7 @@ class SharpApiClient
                 // Add each key-value pair from $data as a form-data field
                 foreach ($data as $key => $value) {
                     $multipart[] = [
-                        'name'     => $key,
+                        'name' => $key,
                         'contents' => is_array($value) ? json_encode($value) : $value,
                     ];
                 }
@@ -281,7 +383,7 @@ class SharpApiClient
             }
         }
 
-        return $this->executeWithRateLimitRetry($method, $this->getApiBaseUrl() . $url, $options);
+        return $this->executeWithRateLimitRetry($method, $this->getApiBaseUrl().$url, $options);
     }
 
     /**
@@ -295,7 +397,10 @@ class SharpApiClient
      * @param string $url The API endpoint relative to the base URL.
      * @param array $queryParams Query parameters to append to the URL.
      * @return ResponseInterface The Guzzle response object.
+     *
      * @throws GuzzleException if the request fails.
+     * @throws ApiException
+     *
      * @api
      */
     protected function makeGetRequest(
@@ -306,16 +411,14 @@ class SharpApiClient
             'headers' => $this->getHeaders(),
         ];
 
-        if (!empty($queryParams)) {
+        if (! empty($queryParams)) {
             $options['query'] = $queryParams;
         }
 
-        return $this->executeWithRateLimitRetry('GET', $this->getApiBaseUrl() . $url, $options);
+        return $this->executeWithRateLimitRetry('GET', $this->getApiBaseUrl().$url, $options);
     }
 
     /**
-     * @param ResponseInterface $response
-     * @return mixed
      * @api
      */
     protected function parseStatusUrl(ResponseInterface $response): mixed
@@ -326,9 +429,11 @@ class SharpApiClient
     /**
      * Polls the API for job results, waiting for the job status to be `SUCCESS` or `FAILED`.
      *
-     * @param string $statusUrl The URL to check the job status.
+     * @param  string  $statusUrl  The URL to check the job status.
      * @return SharpApiJob A DTO representing the completed job with its result.
+     *
      * @throws ApiException|GuzzleException if the job fails or polling times out.
+     *
      * @api
      */
     public function fetchResults(string $statusUrl): SharpApiJob
@@ -336,6 +441,8 @@ class SharpApiClient
         $waitingTime = 0;
 
         do {
+            $this->rateLimiter?->waitIfNeeded();
+
             try {
                 $response = $this->client->request('GET', $statusUrl, ['headers' => $this->getHeaders()]);
             } catch (ClientException $e) {
@@ -352,6 +459,7 @@ class SharpApiClient
                     }
 
                     sleep($retryDelay);
+
                     continue;
                 }
                 throw $e;
@@ -366,7 +474,7 @@ class SharpApiClient
             }
 
             $retryAfter = isset($response->getHeader('Retry-After')[0])
-                ? (int)$response->getHeader('Retry-After')[0]
+                ? (int) $response->getHeader('Retry-After')[0]
                 : $this->getApiJobStatusPollingInterval();
 
             if ($this->isUseCustomInterval()) {
@@ -400,17 +508,18 @@ class SharpApiClient
     /**
      * Extracts rate-limit headers from an API response and stores them.
      *
-     * @param ResponseInterface $response The API response.
+     * @param  ResponseInterface  $response  The API response.
      */
-    private function extractRateLimitHeaders(ResponseInterface $response): void
+    protected function extractRateLimitHeaders(ResponseInterface $response): void
     {
         $limit = $response->getHeader('X-RateLimit-Limit');
-        if (!empty($limit)) {
+        if (! empty($limit)) {
             $this->rateLimitLimit = (int) $limit[0];
+            $this->rateLimiter?->adaptFromServerLimit($this->rateLimitLimit);
         }
 
         $remaining = $response->getHeader('X-RateLimit-Remaining');
-        if (!empty($remaining)) {
+        if (! empty($remaining)) {
             $this->rateLimitRemaining = (int) $remaining[0];
         }
     }
@@ -421,10 +530,10 @@ class SharpApiClient
      * When remaining is at or below the threshold, the base interval is multiplied
      * by a scaling factor that increases as remaining approaches 0.
      *
-     * @param int $baseInterval The original polling interval in seconds.
+     * @param  int  $baseInterval  The original polling interval in seconds.
      * @return int The adjusted interval.
      */
-    private function adjustIntervalForRateLimit(int $baseInterval): int
+    protected function adjustIntervalForRateLimit(int $baseInterval): int
     {
         if ($this->rateLimitRemaining === null || $this->rateLimitRemaining > $this->rateLimitLowThreshold) {
             return $baseInterval;
@@ -437,27 +546,33 @@ class SharpApiClient
     }
 
     /**
-     * Wraps an HTTP request with automatic 429 retry logic.
+     * Wraps an HTTP request with automatic 429 retry logic and proactive throttling.
      *
      * On success, rate-limit headers are extracted. On HTTP 429, the request is
      * retried after sleeping for the Retry-After duration, up to maxRetryOnRateLimit times.
      * All other client exceptions are re-thrown.
      *
-     * @param string $method The HTTP method.
-     * @param string $url The full request URL.
-     * @param array $options Guzzle request options.
+     * @param  string  $method  The HTTP method.
+     * @param  string  $url  The full request URL.
+     * @param  array  $options  Guzzle request options.
      * @return ResponseInterface The successful response.
+     *
      * @throws ApiException if retries are exhausted on 429.
      * @throws GuzzleException for non-429 failures.
      */
-    private function executeWithRateLimitRetry(string $method, string $url, array $options): ResponseInterface
+    protected function executeWithRateLimitRetry(string $method, string $url, array $options): ResponseInterface
     {
+        if ($this->throttleRequests) {
+            $this->rateLimiter?->waitIfNeeded();
+        }
+
         $attempts = 0;
 
         while (true) {
             try {
                 $response = $this->client->request($method, $url, $options);
                 $this->extractRateLimitHeaders($response);
+
                 return $response;
             } catch (ClientException $e) {
                 if ($e->getResponse()->getStatusCode() !== 429) {
@@ -470,7 +585,7 @@ class SharpApiClient
 
                 if ($attempts >= $this->maxRetryOnRateLimit) {
                     throw new ApiException(
-                        'Rate limit exceeded. Retries exhausted after ' . $attempts . ' attempts.',
+                        'Rate limit exceeded. Retries exhausted after '.$attempts.' attempts.',
                         429
                     );
                 }
@@ -480,6 +595,10 @@ class SharpApiClient
                     : 1;
 
                 sleep($retryAfter);
+
+                if ($this->throttleRequests) {
+                    $this->rateLimiter?->waitIfNeeded();
+                }
             }
         }
     }
@@ -489,12 +608,12 @@ class SharpApiClient
      *
      * @return array An associative array of headers.
      */
-    private function getHeaders(): array
+    protected function getHeaders(): array
     {
         return [
-            'Authorization' => 'Bearer ' . $this->getApiKey(),
+            'Authorization' => 'Bearer '.$this->getApiKey(),
             'Accept' => 'application/json',
-            'User-Agent' => $this->getUserAgent()
+            'User-Agent' => $this->getUserAgent(),
         ];
     }
 }

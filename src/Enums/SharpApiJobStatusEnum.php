@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace SharpAPI\Core\Enums;
 
 /**
@@ -16,8 +18,8 @@ enum SharpApiJobStatusEnum: string
 
     /**
      * Get a user-friendly label for each status.
+     *
      * @api
-     * @return string
      */
     public function label(): string
     {
@@ -32,7 +34,6 @@ enum SharpApiJobStatusEnum: string
     /**
      * Get a color associated with each status for UI representation.
      *
-     * @return string
      * @api
      */
     public function color(): string
