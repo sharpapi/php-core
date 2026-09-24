@@ -159,6 +159,30 @@ $client->setRateLimitLowThreshold(5);
 
 When `rateLimitRemaining` is at or below the threshold, polling intervals in `fetchResults()` are multiplied by an increasing factor (2x at threshold, growing as remaining approaches 0). This helps avoid 429 errors during long-running job polling.
 
+### Polling Interval
+
+By default `fetchResults()` waits for the number of seconds the API sends in the `Retry-After` header between status checks. To force your own interval instead, enable it explicitly:
+
+```php
+$client->setApiJobStatusPollingInterval(5); // seconds between status checks
+$client->setUseCustomInterval(true);        // ignore Retry-After, use the value above
+$client->setApiJobStatusPollingWait(180);   // give up after this many seconds
+```
+
+Laravel wrappers expose an `api_job_status_use_polling_interval` config key; it only takes effect if the wrapper passes it to `setUseCustomInterval()`.
+
+---
+
+## Job Results
+
+`fetchResults()` returns a `SharpApiJob` DTO. A job that finished with status `failed` is returned like any other job (it does not throw), so check `$job->status` before reading the result.
+
+- `getResultObject()` returns the result as `stdClass`.
+- `getResultJson()` returns it as a pretty-printed JSON string.
+- `getResultArray()` converts only the top level to an array; nested objects stay `stdClass`. For a fully array-typed structure use `json_decode($job->getResultJson(), true)`.
+
+A missing or empty API key throws `InvalidArgumentException`.
+
 ---
 
 ## Credits
