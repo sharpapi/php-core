@@ -62,21 +62,26 @@ class SharpApiClient
     /**
      * Initializes a new instance of the SharpApiClient class.
      *
-     * @param  string  $apiKey  The API key required for authentication.
+     * @param  string|null  $apiKey  The API key required for authentication. Nullable so that an
+     *                               unset config value (e.g. env('SHARP_API_KEY')) raises the
+     *                               documented InvalidArgumentException instead of a TypeError.
      * @param  string|null  $apiBaseUrl  Optional API base URL override.
      * @param  string|null  $userAgent  Optional User-Agent header value.
      *
-     * @throws InvalidArgumentException if the API key is empty.
+     * @throws InvalidArgumentException if the API key is missing or empty.
      */
     public function __construct(
-        string $apiKey,
+        ?string $apiKey,
         ?string $apiBaseUrl = null,
         ?string $userAgent = null
     ) {
-        $this->setApiKey($apiKey);
-        if (empty($this->apiKey)) {
-            throw new InvalidArgumentException('API key is required.');
+        if (empty($apiKey)) {
+            throw new InvalidArgumentException(
+                'SharpAPI API key is missing. Set the SHARP_API_KEY environment variable '
+                .'(or pass a non-empty key to the client). Get your key at https://sharpapi.com/.'
+            );
         }
+        $this->setApiKey($apiKey);
         $this->setApiBaseUrl($apiBaseUrl ?? 'https://sharpapi.com/api/v1');
         $this->setUserAgent($userAgent ?? 'SharpAPIPHPAgent/1.3.0');
         $this->client = new Client([
@@ -493,15 +498,20 @@ class SharpApiClient
 
         $data = json_decode($response->getBody()->__toString(), true)['data'];
         $url = Url::fromString($statusUrl);
-        $result = count($url->getSegments()) == 5
-            ? (object) json_decode($data['attributes']['result'])
-            : (object) $data['attributes']['result'];
+        $rawResult = $data['attributes']['result'] ?? null;
+
+        // The generic status URL (5 path segments, e.g. /api/v1/job/status/{id}) returns the
+        // result as a JSON-encoded string; endpoint-specific status URLs return it decoded.
+        // A FAILED job may carry a null result, which must not reach json_decode().
+        $result = count($url->getSegments()) == 5 && is_string($rawResult)
+            ? (object) json_decode($rawResult)
+            : (object) $rawResult;
 
         return new SharpApiJob(
             id: $data['id'],
             type: $data['attributes']['type'],
             status: $data['attributes']['status'],
-            result: $result ?? null
+            result: $result
         );
     }
 

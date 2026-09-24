@@ -58,6 +58,10 @@ class SharpApiJob
     /**
      * Returns the job result as a PHP associative array.
      *
+     * Note: the conversion is shallow. Only the top level becomes an array; nested
+     * objects stay stdClass instances. For a fully array-typed structure use
+     * json_decode($job->getResultJson(), true).
+     *
      * @api
      *
      * @return array|null The result as an associative array, or null if no result.
